@@ -1,0 +1,718 @@
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<title>Tiny Rocket</title>
+<style><![CDATA[
+@font-face {
+	font-family: ProggyClean;
+	src: url("ProggyClean.ttf");
+	/* license: url("ProggyClean.LICENSE.txt") */
+}
+html {
+	display: grid;
+	align-content: safe center;
+	justify-content: safe center;
+	height: 100%;
+	overflow: auto;
+	background: #222034;
+}
+body {
+	width: 948px;
+	height: 533px;
+	margin: 0;
+	position: relative;
+	overflow: hidden;
+	font-family: ProggyClean, monospace;
+	font-size: 16px;
+	line-height: 1;
+	-webkit-font-smoothing: none;
+	user-select: none;
+	image-rendering: pixelated;
+}
+.message, .outcome {
+	border: 6px double;
+	border-image: url("message-box.png") 6 fill;
+}
+.message {
+	position: absolute;
+	left: 192px;
+	right: 192px;
+	bottom: 4px;
+	height: 3em;
+	padding: 2px;
+	opacity: .75;
+}
+.outcome {
+	display: none;
+	position: absolute;
+	left: 192px;
+	right: 192px;
+	bottom: 128px;
+}
+body:is(.win, .lose) .message { display: none; }
+body.win .outcome.win { display: block; }
+body.lose .outcome.lose { display: block; }
+h2 {
+	font-weight: normal;
+	font-size: 2em;
+	margin: 0;
+}
+p {
+	margin-block: 8px;
+}
+button {
+	font: inherit;
+	background: none;
+	border: double;
+	border-width: 5px 5px 10px;
+	border-image: 5 5 10 fill;
+	vertical-align: middle;
+	&:hover {
+		border-width: 5px;
+		border-image: 5 fill;
+		translate: 0 5px;
+		margin-bottom: 5px;
+	}
+	&:active {
+		border-width: 7px 5px 3px;
+		border-image: 7 5 5 fill;
+		border-image-width: 7px 5px 5px;
+		translate: 0 5px;
+		margin-bottom: 5px;
+	}
+	&.green { border-image-source: url("button-green.png"); }
+	&.green:hover { border-image-source: url("button-green-hover.png"); }
+	&.green:active { border-image-source: url("button-green-active.png"); }
+	&.red { border-image-source: url("button-red.png"); }
+	&.red:hover { border-image-source: url("button-red-hover.png"); }
+	&.red:active { border-image-source: url("button-red-active.png"); }
+}
+img {
+	pointer-events: none;
+}
+]]></style>
+</head>
+<body>
+<div class="message">
+	<div id="message-text" style="white-space: pre-line"><noscript>This game requires JavaScript.</noscript></div>
+	<img id="continue-arrow" src="continue.png" style="position: absolute; bottom: 1px; right: 1px" />
+</div>
+<div class="outcome win">
+	<h2>Success</h2>
+	<p id="win-reason" />
+	<button onclick="nextLevel()" id="next-level" class="green">Next level</button>
+</div>
+<div class="outcome lose">
+	<h2>Failure</h2>
+	<p id="lose-reason" />
+	<button onclick="retry()" class="green">Retry</button>
+	<button onclick="nextLevel()" id="skip-level" class="red">Skip level</button>
+</div>
+<div style="position: absolute; bottom: 8px; right: 8px">
+	<button id="fast-forward" class="green" title="[F]ast forward">
+		<img src="fast-forward.png" style="vertical-align: middle; margin-inline: -2px" />
+	</button>
+	<button onclick="retryAndSkipMessages()" class="red" title="[R]estart level">
+		<img src="reset.png" style="vertical-align: middle; margin-inline: -4px" />
+	</button>
+</div>
+<canvas width="948" height="533" />
+<div hidden="">
+	<img id="planet" src="planet.png" />
+	<img id="rocket" src="rocket.png" />
+	<img id="fuel-gauge" src="fuel-gauge.png" />
+	<img id="fuel-gauge-small" src="fuel-gauge-small.png" />
+	<img id="space-station" src="space-station.png" />
+	<img id="space-station-windows" src="space-station-windows.png" />
+	<img id="satellite" src="satellite.png" />
+	<img id="station-off" src="station-off.png" />
+	<img id="station-off-diagonal" src="station-off-diagonal.png" />
+	<img id="station-on" src="station-on.png" />
+	<img id="station-on-diagonal" src="station-on-diagonal.png" />
+	<img src="message-box.png" />
+	<img src="button-green.png" />
+	<img src="button-green-hover.png" />
+	<img src="button-green-active.png" />
+	<img src="button-red.png" />
+	<img src="button-red-hover.png" />
+	<img src="button-red-active.png" />
+	<audio id="sfx-rocket" src="rocket.flac" />
+	<audio id="sfx-crash" src="crash.flac" />
+</div>
+<script><![CDATA[
+let {abs, sqrt, hypot, sin, cos, atan2, acos, min, max} = Math;
+let mod = (n, d) => ((n % d) + d) % d;
+let τ = Math.PI * 2;
+let angleDistance = (θ1, θ2) => min(abs(θ1 - θ2), τ - abs(θ1 - θ2));
+
+class Vector {
+	constructor(x, y) {
+		this.x = x;
+		this.y = y;
+	}
+	get len() { return hypot(this.x, this.y) }
+	get θ() { return atan2(this.y, this.x) }
+	add({x, y}) { return v(this.x + x, this.y + y) }
+	sub({x, y}) { return v(this.x - x, this.y - y) }
+	scale(scalar) { return v(this.x * scalar, this.y * scalar) }
+	withLen(scalar) { return this.scale(scalar / this.len) }
+	distanceTo({x, y}) { return hypot(this.x - x, this.y - y) }
+}
+let v = (x, y) => new Vector(x, y);
+let polar = (r, θ) => v(r * cos(θ), r * sin(θ));
+
+let rand = (max = 1, min = 0) => min + Math.random() * (max - min);
+let randInt = (max, min = 0) => ~~rand(max, min);
+let pickRandom = (arr) => arr[randInt(arr.length)];
+
+let $ = (selector) => document.querySelector(selector);
+let canvas = $("canvas");
+let ctx = canvas.getContext("2d", {alpha: false});
+let keysDown = new Set();
+
+let screenSize = v(948, 533);
+let screenCenter = v(474, 266);
+let bounds = screenSize.scale(1/2).add(v(16, 16));
+let planetR = 50;
+let μ = 200;
+let spaceStationPosition = v(-350, 0);
+let spaceStationR = 35;
+
+
+class Orbiter {
+	constructor(r0, v0) {
+		this.r = r0;
+		this.v = v0;
+		this.a = v(0, 0);
+	}
+
+	tick() {
+		this.v = this.v.add(this.a.scale(.5));
+		this.r = this.r.add(this.v);
+		this.a = this.r.withLen(-μ / this.r.len**2);
+		this.v = this.v.add(this.a.scale(.5));
+	}
+
+	getOrbit() {
+		let h = this.r.x * this.v.y - this.r.y * this.v.x;
+		let a = (μ * this.r.len) / (2 * μ - this.r.len * this.v.len ** 2);
+		let e = this.r.withLen(1).add(v(-this.v.y, this.v.x).scale(h/μ));
+		let b = a * sqrt(1 - e.len ** 2);
+		let f2 = e.scale(2 * a);
+		if (a < 0) return null;
+		return {a, b, e, f2};
+	}
+}
+
+function makeCircularOrbiter(r0) {
+	return new Orbiter(r0, polar(sqrt(μ / r0.len), r0.θ + τ / 4));
+}
+
+class FullOrbitTracker {
+	constructor(body) {
+		this.body = body;
+		this.lastθ = this.body.r.θ;
+		this.accumulatedθ = 0;
+	}
+
+	tick() {
+		let newθ = this.body.r.θ;
+		if (thrust) {
+			this.accumulatedθ = 0;
+		} else {
+			this.accumulatedθ += angleDistance(newθ, this.lastθ);
+		}
+		this.lastθ = newθ;
+	}
+}
+
+
+let messageHiddenSpans = [];
+let messageQueue = [];
+let isMessageInProgress = () => messageHiddenSpans.length || messageQueue.length;
+
+function showMessage(string) {
+	messageHiddenSpans = string.split(" ").map((s) => {
+		let el = document.createElement("span");
+		el.textContent = s + " ";
+		el.style.visibility = "hidden";
+		return el;
+	});
+	$("#message-text").replaceChildren(...messageHiddenSpans);
+	$("#continue-arrow").hidden = true;
+}
+
+function showMessages(strings) {
+	messageQueue = strings;
+	keysDown.clear();
+	showMessage(messageQueue.shift());
+}
+
+function progressMessage() {
+	if (messageHiddenSpans.length) {
+		messageHiddenSpans.shift().style.visibility = null;
+	} else if (messageQueue.length) {
+		$("#continue-arrow").hidden = false;
+	}
+}
+
+function bumpMessage() {
+	if (messageHiddenSpans.length) {
+		while (messageHiddenSpans.length) {
+			messageHiddenSpans.shift().style.visibility = null;
+		}
+		if (messageQueue.length) {
+			$("#continue-arrow").hidden = false;
+		}
+	} else if (messageQueue.length) {
+		showMessage(messageQueue.shift());
+	}
+}
+
+function skipMessages() {
+	if (messageQueue.length) {
+		showMessages([messageQueue.at(-1)]);
+	}
+	bumpMessage();
+}
+
+
+addEventListener("keydown", (e) => {
+	if (e.repeat) return;
+	if (isMessageInProgress()) {
+		bumpMessage();
+	} else if (e.code === "KeyR" && !document.body.matches(".win")) {
+		retryAndSkipMessages();
+	} else {
+		keysDown.add(e.code);
+	}
+});
+addEventListener("keyup", (e) => {
+	keysDown.delete(e.code);
+});
+
+
+let stars = [];
+for (let i = 0; i < 500; i++) {
+	let r = v(randInt(screenSize.x) - screenCenter.x, randInt(screenSize.y) - screenCenter.y);
+	if (stars.some(({r: r2}) => r.distanceTo(r2) < 5)) continue;
+	stars.push({
+		r: r,
+		color: pickRandom(["#fff", "#cbdbfc", "#cbdbfc", "#9badb7", "#9badb7", "#9badb7"]),
+	});
+}
+
+function drawPlanet() {
+	ctx.drawImage($("#planet"), -50, -50);
+}
+
+function drawSpaceStation(windowsOn) {
+	ctx.drawImage($("#space-station"), spaceStationPosition.x - 28, spaceStationPosition.y - 28);
+	if (windowsOn) {
+		ctx.drawImage($("#space-station-windows"), spaceStationPosition.x - 28, spaceStationPosition.y - 28);
+	}
+}
+
+
+let rocket, rocketθ, launched;
+let fuel, maxFuel;
+let thrust;
+let lastThrustPosition, exhaustParticles;
+let levelTick, levelDraw;
+
+
+function tickPhysics() {
+	thrust = rocket && fuel > 0 && (keysDown.has("ArrowUp") || keysDown.has("KeyW"));
+	if (thrust) {
+		launched = true;
+		fuel--;
+		lastThrustPosition = rocket.r;
+		rocket.v = rocket.v.add(polar(0.1, rocketθ));
+		exhaustParticles.add({
+			r: rocket.r.add(polar(-10, rocketθ)),
+			v: rocket.v.add(polar(-1, rocketθ)).add(polar(rand(.25), rand(τ))),
+			life: randInt(45),
+			color: pickRandom(["#ac3232", "#df7126", "#847e87", "#9badb7"]),
+		});
+	}
+	for (let p of exhaustParticles) {
+		p.r = p.r.add(p.v);
+		if (p.life-- === 0) exhaustParticles.delete(p);
+	}
+	if (launched && rocket) {
+		if (keysDown.has("ArrowLeft") || keysDown.has("KeyA")) rocketθ -= 0.05;
+		if (keysDown.has("ArrowRight") || keysDown.has("KeyD")) rocketθ += 0.05;
+		rocket.tick();
+	}
+	levelTick();
+	if (rocket && rocket.r.len < planetR) {
+		rocket = null;
+		$("#sfx-crash").play();
+		if (!isLevelResolved()) {
+			resolveLevel("lose", pickRandom([
+				"You crashed.",
+				"Please try not to crash.",
+				"Crashing is frowned upon.",
+				"Per the 3rd edition of the International Rules of Spaceflight, chapter four, crashing into the planet is prohibited.",
+			]));
+		}
+	}
+	if (rocket && (abs(rocket.r.x) > bounds.x || abs(rocket.r.y) > bounds.y)) {
+		rocket = null;
+		if (!isLevelResolved()) {
+			resolveLevel("lose", pickRandom([
+				"We lost track of your rocket. Please stay on screen at all times.",
+				"Rocket left communication range.",
+				"Your rocket was lost in space and/or destroyed by aliens. For safety, please stay on screen.",
+			]));
+		}
+	}
+}
+
+function draw() {
+	progressMessage();
+	ctx.resetTransform();
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+	ctx.translate(screenCenter.x, screenCenter.y);
+	for (let s of stars) {
+		ctx.fillStyle = s.color;
+		ctx.fillRect(s.r.x, s.r.y, 1, 1);
+	}
+	for (let p of exhaustParticles) {
+		ctx.fillStyle = p.color;
+		ctx.fillRect(~~p.r.x - 1, ~~p.r.y - 1, 2, 2);
+	}
+	if (rocket) { // Fuel gauge
+		let r = v(16, 16).sub(screenCenter);
+		let tankHeight = maxFuel === 50 ? 24 : 48;
+		let fuelHeight = ~~(tankHeight * fuel / maxFuel);
+		ctx.fillStyle = "#696a6a";
+		ctx.fillRect(r.x + 2, r.y + 2, 20, tankHeight - fuelHeight);
+		ctx.fillStyle = "#df7126";
+		ctx.fillRect(r.x + 2, r.y + 2 + tankHeight - fuelHeight, 20, fuelHeight);
+		ctx.drawImage($("#fuel-gauge" + (maxFuel === 50 ? "-small" : "")), r.x, r.y);
+	}
+	if (launched && rocket) { // Trajectory
+		ctx.strokeStyle = "#fbf236";
+		ctx.beginPath();
+		let orbit = rocket.getOrbit();
+		if (orbit){
+			ctx.ellipse(orbit.f2.x / 2, orbit.f2.y / 2, orbit.a, orbit.b, orbit.e.θ, 0, τ);
+		}	else {
+			let arrowTip = rocket.r.add(rocket.v.withLen(25));
+			let p1 = arrowTip.add(polar(5, rocket.v.θ + 4));
+			let p2 = arrowTip.add(polar(5, rocket.v.θ - 4));
+			ctx.moveTo(rocket.r.x, rocket.r.y);
+			ctx.lineTo(arrowTip.x, arrowTip.y);
+			ctx.lineTo(p1.x, p1.y);
+			ctx.moveTo(arrowTip.x, arrowTip.y);
+			ctx.lineTo(p2.x, p2.y);
+		}
+		ctx.stroke();
+	}
+	if (lastThrustPosition) {
+		ctx.fillStyle = "#fbf236";
+		ctx.fillRect(lastThrustPosition.x - 3, lastThrustPosition.y - 3, 5, 5);
+	}
+	drawPlanet();
+	levelDraw();
+	if (rocket) {
+		ctx.save();
+		ctx.translate(~~rocket.r.x, ~~rocket.r.y);
+		ctx.rotate(rocketθ);
+		ctx.drawImage($("#rocket"), -10, -6);
+		ctx.restore();
+	}
+	if (thrust) {
+		$("#sfx-rocket").play();
+	} else {
+		$("#sfx-rocket").pause();
+		$("#sfx-rocket").currentTime = 0;
+	}
+}
+
+let prevT = 0;
+requestAnimationFrame(function frame(t) {
+	if (t - prevT >= 16) { // Limit fps on high refresh rate monitors
+		prevT = t;
+		tickPhysics();
+		if ($("#fast-forward").matches(":active") || keysDown.has("KeyF")) {
+			tickPhysics(); tickPhysics(); tickPhysics();
+		}
+		draw();
+	}
+	requestAnimationFrame(frame);
+});
+
+
+let currentLevel = () => +location.hash.match(/#level-(\d+)/)?.[1] || 1;
+let levels = [levelTutorial, levelStationSupplyRun, levelProhibitedAirspace, levelSatellite, levelBlackHoles];
+
+function retry() {
+	document.body.classList.remove("win", "lose");
+	$("#next-level").hidden = $("#skip-level").hidden = currentLevel() === levels.length;
+	rocket = new Orbiter(v(planetR + 10, 0), v(0, 0));
+	rocketθ = 0;
+	launched = false;
+	fuel = maxFuel = 100;
+	lastThrustPosition = null;
+	exhaustParticles = new Set();
+	levels[currentLevel()-1]();
+}
+
+addEventListener("hashchange", retry);
+
+function nextLevel() {
+	location = "#level-" + (currentLevel() + 1);
+}
+
+function retryAndSkipMessages() {
+	retry();
+	skipMessages();
+}
+
+let isLevelResolved = () => document.body.matches(".win, .lose");
+function resolveLevel(outcome, reason) {
+	skipMessages();
+	document.body.classList.add(outcome);
+	$(`#${outcome}-reason`).textContent = reason;
+}
+
+
+function levelTutorial() {
+	showMessages([
+		"Fly your tiny rocket using the arrow keys or WAD.\n[^]/[W]: Thrust\n[<]/[A] [>]/[D]: Turn",
+		"To start out, try getting into orbit.",
+		"Lift off, then fire the engine sideways.\nOnce you're in orbit, go all the way around the planet without firing the engine.",
+	]);
+
+	let fullOrbitTracker = new FullOrbitTracker(rocket);
+
+	levelTick = () => {
+		fullOrbitTracker.tick();
+		if (!isLevelResolved() && fullOrbitTracker.accumulatedθ > τ) {
+			resolveLevel("win", "Great job on the tutorial. Ready for something more challenging?");
+		}
+	};
+
+	levelDraw = () => {};
+}
+
+
+function levelStationSupplyRun() {
+	showMessages([
+		"See that space station over there? This rocket needs to enter an orbit that intersects it.",
+		"Tiny rockets have tiny fuel tanks, so mind the fuel gauge. It's also best if your rocket doesn't leave the screen.",
+		"Enter an orbit that intersects the space station.",
+	]);
+
+	let fullOrbitTracker = new FullOrbitTracker(rocket);
+	let touchedStation = false;
+
+	levelTick = () => {
+		fullOrbitTracker.tick();
+		if (thrust) {
+			touchedStation = false;
+		} else {
+			touchedStation ||= rocket && rocket.r.distanceTo(spaceStationPosition) < spaceStationR;
+		}
+		if (!isLevelResolved() && touchedStation && fullOrbitTracker.accumulatedθ > τ) {
+			resolveLevel("win", "");
+		}
+	};
+
+	levelDraw = () => {
+		drawSpaceStation(touchedStation);
+	};
+}
+
+
+function levelProhibitedAirspace() {
+	showMessages([
+		"In order to improve peoples' view of the aurora borealis, no rockets are allowed in the area above the north pole today.",
+		"Make another run to the space station without entering the marked area.\nBecause orbiting isn't allowed today, crash your rocket into the right side of the planet when you're done.",
+	]);
+
+	let touchedStation = false;
+
+	levelTick = () => {
+		touchedStation ||= rocket && rocket.r.distanceTo(spaceStationPosition) < spaceStationR;
+		if (!isLevelResolved() && rocket.r.len < planetR) {
+			if (!touchedStation) {
+				resolveLevel("lose", "I know you're excited that you're allowed to crash this time, but you should visit the space station first.");
+			} else if (abs(rocket.r.θ) < τ / 4) {
+				resolveLevel("win", "I hope you had fun, 'cause that'll be the last time we ask you to crash a rocket on purpose. (Hopefully.)");
+			} else {
+				resolveLevel("lose", "You need to crash the rocket on the right side of the planet, not the left side.");
+			}
+			rocket = null;
+			$("#sfx-crash").play();
+		}
+		if (!isLevelResolved() && -3 * τ / 8 < rocket.r.θ && rocket.r.θ < -τ / 8) {
+			resolveLevel("lose", "Your rocket is blocking peoples' view of the aurora borealis.");
+		}
+	};
+
+	levelDraw = () => {
+		ctx.strokeStyle = "#d95763";
+		ctx.fillStyle = "#d9576340";
+		ctx.setLineDash([4 * sqrt(2)]);
+		ctx.beginPath();
+		ctx.moveTo(-500, -500);
+		ctx.lineTo(0, 0);
+		ctx.lineTo(500, -500);
+		ctx.fill();
+		ctx.stroke();
+		ctx.setLineDash([]);
+		drawPlanet();
+		drawSpaceStation(touchedStation);
+		if (touchedStation) {
+			ctx.strokeStyle = "#6abe30";
+			ctx.beginPath();
+			ctx.ellipse(0, 0, planetR + 10, planetR + 10, 0, -τ/4, τ/4);
+			ctx.stroke();
+		}
+	};
+}
+
+
+function levelSatellite() {
+	showMessages([
+		"This rocket doubles as a communication satellite.",
+		"(The communication equipment takes up a lot of space on board, so we had to make the fuel tank smaller. Watch out for that.)",
+		"Join the satellite constellation and provide continuous service to all of the ground stations.",
+	]);
+
+	fuel = maxFuel = 50;
+	let satellites = [0, τ / 3].map((θ) => makeCircularOrbiter(polar(150, θ)));
+	let stations = [0, 1, 2, 3, 4, 5, 6, 7].map((n) => ({
+		r: polar(planetR, n * τ / 8),
+		diagonal: !!(n & 1),
+		ticksWithService: 0,
+	}));
+
+	levelTick = () => {
+		let comms = satellites;
+		if (launched && rocket) comms = [...comms, rocket];
+		for (let s of satellites) {
+			s.tick();
+		}
+		for (let s of stations) {
+			let hasService = comms.some((c) => angleDistance(s.r.θ, c.r.θ) < acos(planetR / c.r.len));
+			s.ticksWithService = hasService ? s.ticksWithService + 1 : 0;
+		}
+		if (!isLevelResolved() && stations.every((s) => s.ticksWithService >= 240)) {
+			resolveLevel("win", "");
+		}
+	};
+
+	levelDraw = () => {
+		let comms = satellites;
+		if (launched && rocket) comms = [...comms, rocket];
+		for (let c of comms) {
+			let θrange = acos(planetR / c.r.len);
+			let p1 = polar(planetR, c.r.θ + θrange);
+			let p2 = polar(planetR, c.r.θ - θrange);
+			ctx.fillStyle = "#fbf23640";
+			ctx.beginPath();
+			ctx.moveTo(p1.x, p1.y);
+			ctx.lineTo(c.r.x, c.r.y);
+			ctx.lineTo(p2.x, p2.y);
+			ctx.fill();
+		}
+		drawPlanet();
+		for (let s of satellites) {
+			ctx.save();
+			ctx.translate(~~s.r.x, ~~s.r.y);
+			ctx.rotate(s.r.θ);
+			ctx.drawImage($("#satellite"), -7, -8);
+			ctx.restore();
+		}
+		for (let s of stations) {
+			let image = $(`#station-${s.ticksWithService ? "on" : "off"}${s.diagonal ? "-diagonal" : ""}`);
+			let w, h;
+			if (s.diagonal) {
+				if (s.ticksWithService < 60) w = h = 6;
+				else if (s.ticksWithService < 120) w = h = 8;
+				else if (s.ticksWithService < 180) w = h = 11;
+				else w = h = 14;
+			} else {
+				h = 15;
+				if (s.ticksWithService < 60) w = 7;
+				else if (s.ticksWithService < 120) w = 10;
+				else if (s.ticksWithService < 180) w = 14;
+				else w = 17;
+			}
+			ctx.save();
+			ctx.translate(~~s.r.x, ~~s.r.y);
+			ctx.rotate(s.r.θ - (s.diagonal ? τ / 8 : 0));
+			ctx.drawImage(image, 0, 0, w, h, 0, s.diagonal ? 0 : -8, w, h);
+			ctx.restore();
+		}
+	};
+}
+
+
+function levelBlackHoles() {
+	showMessages([
+		"When they told me they needed to deorbit a rocket",
+		"that's almost out of fuel",
+		"on the day that our planet is hosting a black hole convention",
+		"I immediately thought, \"This is a job for the best rocket pilot IN THE WORLD\"",
+		"but they're sick today, so you get to do it.",
+		"Crash into the planet, not the black holes.",
+	]);
+
+	rocket = makeCircularOrbiter(v(100, -250));
+	rocket.v = rocket.v.add(v(-.1, -.1));
+	rocketθ = rand(τ);
+	launched = true;
+	fuel = 10;
+	let blackHoleR = 30;
+	let blackHoles = [];
+	for (let i = 0; i < 7; i++) {
+		let o = makeCircularOrbiter(polar(rand(70, 200), rand(τ)));
+		o.v = o.v.add(polar(rand(.5), rand(τ)));
+		blackHoles.push(o);
+	}
+
+	levelTick = () => {
+		for (let b of blackHoles) {
+			b.tick();
+			if (rocket && rocket.r.distanceTo(b.r) < blackHoleR) {
+				rocket = null;
+				resolveLevel("lose", "Your rocket was sucked into a black hole.");
+			}
+		}
+		if (!isLevelResolved() && rocket.r.len < planetR) {
+			rocket = null;
+			$("#sfx-crash").play();
+			resolveLevel("win", "Game complete");
+		}
+	};
+
+	levelDraw = () => {
+		for (let b of blackHoles) {
+			ctx.fillStyle = "#76428a";
+			for (let i = 0; i < 16; i++) {
+				let s = polar(blackHoleR + rand(-2, 2), (i+rand())/16 * τ/4);
+				ctx.fillRect(b.r.x - s.x, b.r.y - s.y, s.x * 2, s.y * 2);
+			}
+			ctx.fillStyle = "#000";
+			for (let i = 0; i < 16; i++) {
+				let s = polar(blackHoleR / sqrt(2) + rand(-2, 2), (i+rand())/16 * τ/4);
+				ctx.fillRect(b.r.x - s.x, b.r.y - s.y, s.x * 2, s.y * 2);
+			}
+			ctx.fillStyle = "#d77bba";
+			for (let i = 0; i < 4; i++) {
+				let r = polar(rand(blackHoleR / sqrt(2), blackHoleR), rand(τ));
+				ctx.fillRect(b.r.x + r.x - 1, b.r.y + r.y - 1, 2, 2);
+			}
+		}
+	};
+}
+
+
+retry();
+]]></script>
+</body>
+</html>
